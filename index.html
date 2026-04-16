@@ -827,21 +827,22 @@
 //
 //  SETUP (3 steps):
 //  1. Go to https://rapidapi.com and create a free account
-//  2. Search "Yahoo Finance" → subscribe to "Yahoo Finance by Apidojo"
-//     (free tier gives 500 req/month — enough for personal use)
+//  2. Search "Yahoo Finance" → subscribe to "Yahoo Finance by Enclout"
+//     
 //  3. Copy your X-RapidAPI-Key from the RapidAPI dashboard and paste below
 //
 //  DEPLOY TO GITHUB PAGES:
 //  - Create a repo, add this file as index.html, enable Pages in Settings
 // ══════════════════════════════════════════════════════════════════════════
 
-const RAPIDAPI_KEY  = 'AAPL%2C%20MSFT%2C%20GOOG';  // ← paste your key here
+const RAPIDAPI_KEY  = 'YOUR_RAPIDAPI_KEY_HERE';  // ← paste your key here
 const RAPIDAPI_HOST = 'enclout-yahoo-finance.p.rapidapi.com';
-const API_BASE      = `https://${RAPIDAPI_HOST}/api/v1`;
+const API_BASE      = `https://${RAPIDAPI_HOST}`;
 
 const API_HEADERS = {
+  'Content-Type':    'application/json',
+  'x-rapidapi-host': RAPIDAPI_HOST,
   'x-rapidapi-key':  RAPIDAPI_KEY,
-  'x-rapidapi-host': RAPIDAPI_HOST
 };
 
 // ── STATE ──────────────────────────────────────────────────────────────────
@@ -929,7 +930,7 @@ function showApiKeyWarning() {
         <code style="color:var(--accent-amber)">YOUR_RAPIDAPI_KEY_HERE</code> with your actual key.<br><br>
         <strong style="color:var(--text-primary)">How to get a free key:</strong><br>
         1. Sign up at <a href="https://rapidapi.com" target="_blank" style="color:var(--accent)">rapidapi.com</a><br>
-        2. Search for <strong>"Yahoo Finance"</strong> → subscribe to the free plan<br>
+        2. Search for <strong>"Yahoo Finance"</strong> by Enclout → subscribe to the free plan<br>
         3. Copy your <code>X-RapidAPI-Key</code> from the dashboard
       </div>
     </div>`;
@@ -937,66 +938,96 @@ function showApiKeyWarning() {
 
 // ── CORE API CALLS ─────────────────────────────────────────────────────────
 
-// Fetch a real-time quote + company summary for a symbol
+// Fetch a real-time quote for a symbol
+// Enclout endpoint: GET /show.json?text=SYMBOL
 async function fetchQuote(symbol) {
-  const url = `${API_BASE}/markets/stock/quotes?ticker=${encodeURIComponent(symbol)}`;
+  const url = `${API_BASE}/show.json?text=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, { headers: API_HEADERS });
   if (!res.ok) throw new Error(`Quote fetch failed: ${res.status} ${res.statusText}`);
   const data = await res.json();
-  // API returns { body: [ { ... } ] }
-  const q = data?.body?.[0];
+  // Enclout returns an array of quote objects
+  const arr = Array.isArray(data) ? data : (data?.quoteResponse?.result || data?.result || [data]);
+  const q = arr[0];
   if (!q) throw new Error(`No quote data returned for ${symbol}`);
   return q;
 }
 
-// Fetch company profile / summary info
+// Fetch company summary — Enclout exposes summary via the same show.json endpoint.
+// We pass a comma-separated list; first result is the target stock's profile fields.
 async function fetchProfile(symbol) {
-  const url = `${API_BASE}/markets/stock/modules?ticker=${encodeURIComponent(symbol)}&module=asset-profile`;
-  const res = await fetch(url, { headers: API_HEADERS });
-  if (!res.ok) return null; // non-fatal — summary is optional
-  const data = await res.json();
-  return data?.body?.assetProfile || null;
+  try {
+    const url = `${API_BASE}/show.json?text=${encodeURIComponent(symbol)}`;
+    const res = await fetch(url, { headers: API_HEADERS });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const arr = Array.isArray(data) ? data : [data];
+    const q = arr[0];
+    // Enclout may embed profile fields directly on the quote object
+    return {
+      sector:              q?.sector              || q?.sectorDisp              || null,
+      longBusinessSummary: q?.longBusinessSummary || q?.description             || null,
+      city:                q?.city                || null,
+      country:             q?.country             || null,
+      fullTimeEmployees:   q?.fullTimeEmployees   || null,
+      foundedYear:         q?.founded             || null,
+    };
+  } catch(e) { return null; }
 }
 
-// Fetch historical chart data for the price graph
+// Fetch historical chart data — Enclout endpoint: GET /historical_data.json
+// Returns { prices: [ { date, open, high, low, close, volume }, ... ] }
 async function fetchChart(symbol, timeframe) {
   const { interval, range } = TF_PARAMS[timeframe] || TF_PARAMS['1D'];
-  const url = `${API_BASE}/markets/stock/history?ticker=${encodeURIComponent(symbol)}&interval=${interval}&diffandsplits=false`;
+  const url = `${API_BASE}/historical_data.json?text=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`;
   const res = await fetch(url, { headers: API_HEADERS });
   if (!res.ok) throw new Error(`Chart fetch failed: ${res.status}`);
   const data = await res.json();
-  // Returns { body: { ...timestamps: { close, timestamp } } }
-  const body = data?.body;
-  if (!body) return { labels: [], prices: [] };
 
-  // body is an object keyed by unix timestamp string
-  const entries = Object.entries(body)
-    .filter(([k]) => !isNaN(Number(k)))
-    .sort(([a],[b]) => Number(a)-Number(b));
+  // Enclout wraps history in data.prices or data.chart.result[0].indicators
+  let rows = data?.prices || data?.chart?.result?.[0]?.timestamp || [];
 
-  const labels = entries.map(([ts]) => {
-    const d = new Date(Number(ts) * 1000);
-    if (timeframe === '1D') {
-      return d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'});
-    } else if (timeframe === '1W') {
-      return d.toLocaleDateString('en-GB', {weekday:'short', day:'numeric'});
-    } else {
-      return d.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
-    }
-  });
-  const prices = entries.map(([, v]) => v.close != null ? +v.close.toFixed(4) : null).filter(Boolean);
+  // Format A: array of { date (unix), close }
+  if (Array.isArray(rows) && rows.length && typeof rows[0] === 'object' && 'close' in rows[0]) {
+    rows = rows.filter(r => r.close != null && r.date != null).sort((a,b) => a.date - b.date);
+    const labels = rows.map(r => {
+      const d = new Date(r.date * 1000);
+      return timeframe === '1D'
+        ? d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})
+        : d.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+    });
+    const prices = rows.map(r => +Number(r.close).toFixed(4));
+    return { labels, prices };
+  }
 
-  return { labels: labels.slice(-prices.length), prices };
+  // Format B: parallel timestamp array + adjclose indicators (Yahoo-native shape)
+  const timestamps = data?.chart?.result?.[0]?.timestamp || [];
+  const closes     = data?.chart?.result?.[0]?.indicators?.adjclose?.[0]?.adjclose
+                  || data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [];
+  if (timestamps.length && closes.length) {
+    const pairs = timestamps.map((ts, i) => ({ ts, c: closes[i] }))
+      .filter(p => p.c != null);
+    const labels = pairs.map(p => {
+      const d = new Date(p.ts * 1000);
+      return timeframe === '1D'
+        ? d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})
+        : d.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
+    });
+    const prices = pairs.map(p => +Number(p.c).toFixed(4));
+    return { labels, prices };
+  }
+
+  return { labels: [], prices: [] };
 }
 
-// Fetch a batch of index quotes for the ticker bar & market cards
+// Fetch a batch of quotes — Enclout accepts comma-separated tickers in text=
 async function fetchIndexBatch(symbols) {
-  const joined = symbols.map(encodeURIComponent).join(',');
-  const url = `${API_BASE}/markets/stock/quotes?ticker=${joined}`;
+  const joined = symbols.join(',');
+  const url = `${API_BASE}/show.json?text=${encodeURIComponent(joined)}`;
   const res = await fetch(url, { headers: API_HEADERS });
   if (!res.ok) return [];
   const data = await res.json();
-  return data?.body || [];
+  // Returns array of quote objects, one per symbol
+  return Array.isArray(data) ? data : (data?.quoteResponse?.result || []);
 }
 
 // ── CLOCK ──────────────────────────────────────────────────────────────────
