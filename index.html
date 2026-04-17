@@ -387,7 +387,7 @@
   .dashboard-grid {
     display: grid;
     grid-template-columns: 1fr 340px;
-    grid-template-rows: auto auto;
+    grid-template-rows: auto auto auto;
     gap: 1px;
     background: var(--border);
     border: 1px solid var(--border);
@@ -401,6 +401,7 @@
   .panel-chart { grid-row: 1; grid-column: 1; }
   .panel-attrs { grid-row: 1 / 3; grid-column: 2; }
   .panel-summary { grid-row: 2; grid-column: 1; }
+  .panel-news    { grid-row: 3; grid-column: 1; }
 
   .panel-title {
     font-family: var(--mono);
@@ -694,6 +695,40 @@
     opacity: 0.6;
   }
 
+
+  /* NEWS PANEL */
+  .news-list { display: flex; flex-direction: column; gap: 0; }
+  .news-item {
+    padding: 0.8rem 0;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .news-item:last-child { border-bottom: none; }
+  .news-item:hover { background: rgba(0,212,255,0.03); margin: 0 -1.5rem; padding: 0.8rem 1.5rem; }
+  .news-headline {
+    font-size: 0.78rem;
+    color: var(--text-primary);
+    line-height: 1.5;
+    margin-bottom: 0.3rem;
+    font-weight: 400;
+  }
+  .news-meta {
+    font-family: var(--mono);
+    font-size: 0.6rem;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    display: flex;
+    gap: 1rem;
+  }
+  .news-source { color: var(--accent); }
+  .news-empty {
+    font-family: var(--mono);
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    padding: 1rem 0;
+  }
   /* Responsive */
   @media (max-width: 900px) {
     .dashboard-grid {
@@ -811,13 +846,19 @@
         <div class="panel-title">Company Overview</div>
         <div id="summaryContent"></div>
       </div>
+
+      <!-- NEWS -->
+      <div class="panel panel-news">
+        <div class="panel-title">Latest News</div>
+        <div id="newsContent"><div class="news-empty">— Search a symbol to load news —</div></div>
+      </div>
     </div>
   </div>
 
 </main>
 
 <footer>
-  <div class="footer-note">ATLAS / GLOBAL MARKETS — SIMULATED DATA FOR DEMONSTRATION. NOT FINANCIAL ADVICE.</div>
+  <div class="footer-note">ATLAS / GLOBAL MARKETS — LIVE DATA VIA YAHOO FINANCE (RAPIDAPI). NOT FINANCIAL ADVICE.</div>
   <div class="footer-note" id="lastUpdated">LAST UPDATED: —</div>
 </footer>
 
@@ -827,7 +868,7 @@
 //
 //  SETUP (3 steps):
 //  1. Go to https://rapidapi.com and create a free account
-//  2. Search "Yahoo Finance" → subscribe to "Yahoo Finance by Enclout"
+//  2. Search "Yahoo Finance" → subscribe to "Yahoo Finance" by Apidojo (yahoo-finance15)
 //     
 //  3. Copy your X-RapidAPI-Key from the RapidAPI dashboard and paste below
 //
@@ -837,7 +878,7 @@
 
 const RAPIDAPI_KEY  = '7914d7a3eamshdce1197333b3cefp19cdd1jsn5deb1a4dbfbf';  // ← paste your key here
 const RAPIDAPI_HOST = 'yahoo-finance15.p.rapidapi.com';
-const API_BASE      = `https://${RAPIDAPI_HOST}`;
+const API_BASE      = `https://${RAPIDAPI_HOST}/api/v1`;
 
 const API_HEADERS = {
   'Content-Type':    'application/json',
@@ -930,7 +971,7 @@ function showApiKeyWarning() {
         <code style="color:var(--accent-amber)">YOUR_RAPIDAPI_KEY_HERE</code> with your actual key.<br><br>
         <strong style="color:var(--text-primary)">How to get a free key:</strong><br>
         1. Sign up at <a href="https://rapidapi.com" target="_blank" style="color:var(--accent)">rapidapi.com</a><br>
-        2. Search for <strong>"Yahoo Finance"</strong> by Enclout → subscribe to the free plan<br>
+        2. Search for <strong>"Yahoo Finance"</strong> (yahoo-finance15) → subscribe to the free plan<br>
         3. Copy your <code>X-RapidAPI-Key</code> from the dashboard
       </div>
     </div>`;
@@ -938,98 +979,88 @@ function showApiKeyWarning() {
 
 // ── CORE API CALLS ─────────────────────────────────────────────────────────
 
-// Fetch a real-time quote for a symbol
-// Enclout endpoint: GET /show.json?text=SYMBOL
+// Fetch real-time quote  — GET /markets/stock/quotes?ticker=SYMBOL
 async function fetchQuote(symbol) {
-  const url = `${API_BASE}/show.json?text=${encodeURIComponent(symbol)}`;
+  const url = `${API_BASE}/markets/stock/quotes?ticker=${encodeURIComponent(symbol)}`;
   const res = await fetch(url, { headers: API_HEADERS });
   if (!res.ok) throw new Error(`Quote fetch failed: ${res.status} ${res.statusText}`);
   const data = await res.json();
-  // Enclout returns an array of quote objects
-  const arr = Array.isArray(data) ? data : (data?.quoteResponse?.result || data?.result || [data]);
-  const q = arr[0];
-  if (!q) throw new Error(`No quote data returned for ${symbol}`);
+  const q = data?.body?.[0];
+  if (!q) throw new Error(`No quote data for ${symbol}`);
   return q;
 }
 
-// Fetch company summary — Enclout exposes summary via the same show.json endpoint.
-// We pass a comma-separated list; first result is the target stock's profile fields.
+// Fetch company profile — GET /markets/stock/modules?ticker=SYMBOL&module=asset-profile,summaryProfile
 async function fetchProfile(symbol) {
   try {
-    const url = `${API_BASE}/show.json?text=${encodeURIComponent(symbol)}`;
+    const url = `${API_BASE}/markets/stock/modules?ticker=${encodeURIComponent(symbol)}&module=asset-profile,summaryProfile`;
     const res = await fetch(url, { headers: API_HEADERS });
     if (!res.ok) return null;
     const data = await res.json();
-    const arr = Array.isArray(data) ? data : [data];
-    const q = arr[0];
-    // Enclout may embed profile fields directly on the quote object
-    return {
-      sector:              q?.sector              || q?.sectorDisp              || null,
-      longBusinessSummary: q?.longBusinessSummary || q?.description             || null,
-      city:                q?.city                || null,
-      country:             q?.country             || null,
-      fullTimeEmployees:   q?.fullTimeEmployees   || null,
-      foundedYear:         q?.founded             || null,
-    };
+    return data?.body?.assetProfile || data?.body?.summaryProfile || null;
   } catch(e) { return null; }
 }
 
-// Fetch historical chart data — Enclout endpoint: GET /historical_data.json
-// Returns { prices: [ { date, open, high, low, close, volume }, ... ] }
+// Fetch historical chart data — GET /markets/stock/history?ticker=SYMBOL&interval=X&diffandsplits=false
 async function fetchChart(symbol, timeframe) {
   const { interval, range } = TF_PARAMS[timeframe] || TF_PARAMS['1D'];
-  const url = `${API_BASE}/historical_data.json?text=${encodeURIComponent(symbol)}&range=${range}&interval=${interval}`;
+  const url = `${API_BASE}/markets/stock/history?ticker=${encodeURIComponent(symbol)}&interval=${interval}&diffandsplits=false`;
   const res = await fetch(url, { headers: API_HEADERS });
   if (!res.ok) throw new Error(`Chart fetch failed: ${res.status}`);
   const data = await res.json();
 
-  // Enclout wraps history in data.prices or data.chart.result[0].indicators
-  let rows = data?.prices || data?.chart?.result?.[0]?.timestamp || [];
+  // yahoo-finance15 returns body as an object keyed by unix timestamp
+  const body = data?.body;
+  if (!body || typeof body !== 'object') return { labels: [], prices: [] };
 
-  // Format A: array of { date (unix), close }
-  if (Array.isArray(rows) && rows.length && typeof rows[0] === 'object' && 'close' in rows[0]) {
-    rows = rows.filter(r => r.close != null && r.date != null).sort((a,b) => a.date - b.date);
-    const labels = rows.map(r => {
-      const d = new Date(r.date * 1000);
-      return timeframe === '1D'
-        ? d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})
-        : d.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
-    });
-    const prices = rows.map(r => +Number(r.close).toFixed(4));
-    return { labels, prices };
-  }
+  const entries = Object.entries(body)
+    .filter(([k]) => !isNaN(Number(k)))
+    .sort(([a], [b]) => Number(a) - Number(b));
 
-  // Format B: parallel timestamp array + adjclose indicators (Yahoo-native shape)
-  const timestamps = data?.chart?.result?.[0]?.timestamp || [];
-  const closes     = data?.chart?.result?.[0]?.indicators?.adjclose?.[0]?.adjclose
-                  || data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || [];
-  if (timestamps.length && closes.length) {
-    const pairs = timestamps.map((ts, i) => ({ ts, c: closes[i] }))
-      .filter(p => p.c != null);
-    const labels = pairs.map(p => {
-      const d = new Date(p.ts * 1000);
-      return timeframe === '1D'
-        ? d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit'})
-        : d.toLocaleDateString('en-GB', {day:'numeric', month:'short'});
-    });
-    const prices = pairs.map(p => +Number(p.c).toFixed(4));
-    return { labels, prices };
-  }
+  // Trim to the requested range
+  const rangeDays = { '1D':1, '1W':5, '1M':30, '3M':90, '1Y':365 }[timeframe] || 30;
+  const cutoff = (Date.now() / 1000) - (rangeDays * 86400);
+  const filtered = entries.filter(([k]) => Number(k) >= cutoff);
+  const rows = filtered.length >= 5 ? filtered : entries; // fallback to all if sparse
 
-  return { labels: [], prices: [] };
+  const labels = rows.map(([ts]) => {
+    const d = new Date(Number(ts) * 1000);
+    if (timeframe === '1D')
+      return d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+    if (timeframe === '1W')
+      return d.toLocaleDateString('en-GB', { weekday:'short', day:'numeric' });
+    return d.toLocaleDateString('en-GB', { day:'numeric', month:'short' });
+  });
+
+  const prices = rows.map(([, v]) => {
+    const c = v?.close ?? v?.adjclose ?? v?.regularMarketPrice;
+    return c != null ? +Number(c).toFixed(4) : null;
+  }).filter(Boolean);
+
+  return { labels: labels.slice(-prices.length), prices };
 }
 
-// Fetch a batch of quotes — Enclout accepts comma-separated tickers in text=
+// Batch quote fetch — GET /markets/stock/quotes?ticker=A,B,C
 async function fetchIndexBatch(symbols) {
-  const joined = symbols.join(',');
-  const url = `${API_BASE}/show.json?text=${encodeURIComponent(joined)}`;
+  const joined = symbols.map(encodeURIComponent).join(',');
+  const url = `${API_BASE}/markets/stock/quotes?ticker=${joined}`;
   const res = await fetch(url, { headers: API_HEADERS });
   if (!res.ok) return [];
   const data = await res.json();
-  // Returns array of quote objects, one per symbol
-  return Array.isArray(data) ? data : (data?.quoteResponse?.result || []);
+  return data?.body || [];
 }
 
+
+// Fetch latest news headlines — GET /markets/news?ticker=SYMBOL
+async function fetchNews(symbol) {
+  try {
+    const url = `${API_BASE}/markets/news?ticker=${encodeURIComponent(symbol)}`;
+    const res = await fetch(url, { headers: API_HEADERS });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data?.body || [];
+  } catch(e) { return []; }
+}
 // ── CLOCK ──────────────────────────────────────────────────────────────────
 function updateClock() {
   document.getElementById('clock').textContent =
@@ -1319,6 +1350,9 @@ async function renderStock(profile, symbol) {
       </div>
     </div>`;
 
+  // NEWS (async, non-blocking)
+  renderNews(symbol);
+
   // SHOW dashboard
   document.getElementById('results').style.display = 'block';
   document.getElementById('results').classList.add('visible');
@@ -1327,6 +1361,36 @@ async function renderStock(profile, symbol) {
 
   // CHART (fetch async after showing layout)
   await renderChart(symbol, profile, currentTimeframe);
+}
+
+
+// ── NEWS RENDER ────────────────────────────────────────────────────────────
+async function renderNews(symbol) {
+  const el = document.getElementById('newsContent');
+  if (!el) return;
+  el.innerHTML = '<div class="news-empty">Loading headlines...</div>';
+
+  const items = await fetchNews(symbol);
+  if (!items.length) {
+    el.innerHTML = '<div class="news-empty">No recent news found for this symbol.</div>';
+    return;
+  }
+
+  el.innerHTML = '<div class="news-list">' + items.slice(0, 8).map(n => {
+    const title      = n.title || n.headline || n.summary || 'Untitled';
+    const source     = n.source || n.publisher || n.providerPublishTime || '';
+    const published  = n.providerPublishTime
+      ? new Date(n.providerPublishTime * 1000).toLocaleDateString('en-GB', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })
+      : (n.pubDate || n.published || '');
+    const link       = n.link || n.url || '#';
+    return `<div class="news-item" onclick="window.open('${link}','_blank')">
+      <div class="news-headline">${title}</div>
+      <div class="news-meta">
+        <span class="news-source">${source}</span>
+        <span>${published}</span>
+      </div>
+    </div>`;
+  }).join('') + '</div>';
 }
 
 // ── CHART ──────────────────────────────────────────────────────────────────
